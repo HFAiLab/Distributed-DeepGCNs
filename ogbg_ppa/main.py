@@ -6,15 +6,14 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data.distributed import DistributedSampler
-import torch.optim as optim
 import torch.backends.cudnn as cudnn
-from torch.nn.parallel import DistributedDataParallel
 from functools import partial
 from torch_geometric.loader import DataLoader
 
 import hfai
 hfai.set_watchdog_time(21600)
 import hfai.nccl.distributed as dist
+from hfai.nn.parallel import DistributedDataParallel
 
 from ogbg_ppa.args import get_args
 from ogbg_ppa.dataset import OGBGDataset
@@ -124,7 +123,7 @@ def main(local_rank):
 
     model = DeeperGCN(args)
     model = DistributedDataParallel(model.cuda(), device_ids=[local_rank])
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = torch.nn.CrossEntropyLoss()
 
     # load
@@ -167,4 +166,4 @@ def main(local_rank):
 
 if __name__ == "__main__":
     ngpus = torch.cuda.device_count()
-    torch.multiprocessing.spawn(main, args=(), nprocs=ngpus)
+    hfai.multiprocessing.spawn(main, args=(), nprocs=ngpus, bind_numa=True)

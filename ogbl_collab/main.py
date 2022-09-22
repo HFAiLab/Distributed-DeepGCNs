@@ -7,12 +7,12 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 import torch.backends.cudnn as cudnn
-from torch.nn.parallel import DistributedDataParallel
 
 import hfai
 hfai.set_watchdog_time(21600)
 import hfai.nccl.distributed as dist
 from hfai.datasets import OGB
+from hfai.nn.parallel import DistributedDataParallel
 
 from ogbl_collab.args import get_args
 from ogbl_collab.eval import Evaluator
@@ -125,17 +125,17 @@ def main(local_rank):
     save_path = SAVE_PATH / sub_dir
     save_path.mkdir(parents=True, exist_ok=True)
 
-    # fix the seed for reproducibility
-    torch.manual_seed(42)
-    np.random.seed(42)
-    cudnn.benchmark = True
-
     # init dist
     ip = os.environ.get("MASTER_ADDR", "127.0.0.1")
     port = os.environ.get("MASTER_PORT", "54247")
     hosts = int(os.environ.get("WORLD_SIZE", "1"))  # number of nodes
     rank = int(os.environ.get("RANK", "0"))  # node id
     gpus = torch.cuda.device_count()  # gpus per node
+
+    # fix the seed for reproducibility
+    torch.manual_seed(42)
+    np.random.seed(42 + rank * gpus + local_rank)
+    cudnn.benchmark = True
 
     dist.init_process_group(backend="nccl", init_method=f"tcp://{ip}:{port}", world_size=hosts * gpus, rank=rank * gpus + local_rank)
     torch.cuda.set_device(local_rank)
@@ -202,4 +202,4 @@ def main(local_rank):
 
 if __name__ == "__main__":
     ngpus = torch.cuda.device_count()
-    torch.multiprocessing.spawn(main, args=(), nprocs=ngpus)
+    hfai.multiprocessing.spawn(main, args=(), nprocs=ngpus, bind_numa=True)

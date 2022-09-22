@@ -5,13 +5,12 @@ import os
 from pathlib import Path
 import numpy as np
 import torch
-import torch.optim as optim
 import torch.backends.cudnn as cudnn
-from torch.nn.parallel import DistributedDataParallel
 
 import hfai
 hfai.set_watchdog_time(21600)
 import hfai.nccl.distributed as dist
+from hfai.nn.parallel import DistributedDataParallel
 
 from ogbn_proteins.dataset import OGBNDataset
 from ogbn_proteins.model import DeeperGCN
@@ -132,15 +131,31 @@ def multi_evaluate(valid_data_list, dataset, model, evaluator):
     eval_result = {}
 
     input_dict = {"y_true": target[train_idx], "y_pred": train_pre_final}
-    eval_result["train"] = evaluator.eval(input_dict)
+    train_eval = torch.FloatTensor([evaluator.eval(input_dict)]).cuda()
 
     input_dict = {"y_true": target[valid_idx], "y_pred": valid_pre_final}
-    eval_result["valid"] = evaluator.eval(input_dict)
+    valid_eval = torch.FloatTensor([evaluator.eval(input_dict)]).cuda()
 
     input_dict = {"y_true": target[test_idx], "y_pred": test_pre_final}
-    eval_result["test"] = evaluator.eval(input_dict)
+    test_eval = torch.FloatTensor([evaluator.eval(input_dict)]).cuda()
 
-    return eval_result
+    total = torch.FloatTensor([1.0]).cuda()
+
+    for x in [train_eval, valid_eval, test_eval, total]:
+        dist.reduce(x, 0)
+
+    if dist.get_rank() == 0:
+        return {
+            'train': train_eval.item() / total.item(),
+            'valid': valid_eval.item() / total.item(),
+            'test': test_eval.item() / total.item()
+        }
+    else:
+        return {
+            'train': train_eval.item(),
+            'valid': valid_eval.item(),
+            'test': test_eval.item()
+        }
 
 
 def main(local_rank):
@@ -150,17 +165,17 @@ def main(local_rank):
     save_path = SAVE_PATH / sub_dir
     save_path.mkdir(parents=True, exist_ok=True)
 
-    # fix the seed for reproducibility
-    torch.manual_seed(42)
-    np.random.seed(42)
-    cudnn.benchmark = True
-
     # init dist
     ip = os.environ.get("MASTER_ADDR", "127.0.0.1")
     port = os.environ.get("MASTER_PORT", "54247")
     hosts = int(os.environ.get("WORLD_SIZE", "1"))  # number of nodes
     rank = int(os.environ.get("RANK", "0"))  # node id
     gpus = torch.cuda.device_count()  # gpus per node
+
+    # fix the seed for reproducibility
+    torch.manual_seed(42)
+    np.random.seed(42 + rank * gpus + local_rank)
+    cudnn.benchmark = True
 
     dist.init_process_group(backend="nccl", init_method=f"tcp://{ip}:{port}", world_size=hosts * gpus, rank=rank * gpus + local_rank)
     torch.cuda.set_device(local_rank)
@@ -181,7 +196,7 @@ def main(local_rank):
 
     model = DeeperGCN(args)
     model = DistributedDataParallel(model.cuda(), device_ids=[local_rank])
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     # load
     start_epoch, best_eval = 0, 0
@@ -225,4 +240,4 @@ def main(local_rank):
 
 if __name__ == "__main__":
     ngpus = torch.cuda.device_count()
-    torch.multiprocessing.spawn(main, args=(), nprocs=ngpus)
+    hfai.multiprocessing.spawn(main, args=(), nprocs=ngpus, bind_numa=True)
