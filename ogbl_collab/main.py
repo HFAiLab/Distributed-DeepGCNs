@@ -156,7 +156,7 @@ def main(local_rank):
     predictor = LinkPredictor(args)
     model = DistributedDataParallel(model.cuda(), device_ids=[local_rank])
     predictor = DistributedDataParallel(predictor.cuda(), device_ids=[local_rank])
-    optimizer = torch.optim.Adam(list(model.parameters()) + list(predictor.parameters()), lr=args.lr)
+    optimizer = torch.optim.Adam(list(model.parameters()) + list(predictor.parameters()), lr=args.lr * hosts * gpus)
 
 
     # load

@@ -196,7 +196,7 @@ def main(local_rank):
 
     model = DeeperGCN(args)
     model = DistributedDataParallel(model.cuda(), device_ids=[local_rank])
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr * hosts * gpus)
 
     # load
     start_epoch, best_eval = 0, 0
